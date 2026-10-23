@@ -1,0 +1,6 @@
+base_url: "https://openrouter.ai/api/v1"
+model: "liquid/lfm-2.5-2.6b:free"
+meodels: 
+  - liquid: "liquid/lfm-2.5-2.6b:free"    
+  - google: "google/gemma-4-31b-it:free"
+  - openai: "openai/gpt-4o"
