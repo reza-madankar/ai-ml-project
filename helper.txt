@@ -1,0 +1,18 @@
+Contents = [
+    title: string
+    body: htmlString
+    type: [audio|video|text]
+    urlFile: string
+    skillType: string //Reading|Listening|Speaking|Writing
+    questions: [
+        title: string
+        type: [audio|video|text]
+        urlFile: string
+        trap: trapType
+        options:[
+            title: string 
+            isValid: boolean
+            mention: string //Part of content to mention 
+        ]
+    ]
+]

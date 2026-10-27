@@ -2,6 +2,20 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import yaml
+from pydantic import BaseModel, Field, validator
+
+
+class Ticket(BaseModel):
+    model: str = Field(..., description="The model to use")
+    base_url: str = Field(..., description="The base URL to use")
+    api_key: str = Field(..., description="The API key to use")
+
+    @validator('model')
+    def validate_model(cls, v):
+        if v not in ['liquid', 'google']:
+            raise ValueError("Model must be either liquid or google")
+
+
 
 
 load_dotenv()
