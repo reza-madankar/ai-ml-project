@@ -1,0 +1,16 @@
+provider: "gemini"   # "openrouter" or "gemini"
+
+providers:
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+    api_key_env: "OPENAI_ROUTER_KEY"
+    model: "google/gemma-4-31b-it:free"
+    models:
+      liquid: "google/gemma-4-31b-it:free"
+      google: "google/gemma-4-31b-it:free"
+      openai: "openai/gpt-4o"
+
+  gemini:
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+    api_key_env: "GOOGLE_API_KEY"
+    model: "gemini-3.5-flash"
