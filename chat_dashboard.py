@@ -10,6 +10,10 @@ How a chat app works
 2. Normal variables disappear on each rerun. st.session_state keeps the chat.
 3. Each message is a dict: {"role": "user" or "assistant", "content": "..."}.
 4. On every new message we send the full list to the model, so it remembers.
+5. stream=True returns the answer one token at a time. st.write_stream
+   paints those tokens as they arrive, instead of waiting for the full reply.
+6. st.spinner("Thinking...") is the spinner. It stays on only until the
+   first token arrives, then the typed reply replaces it.
 """
 
 import os
@@ -76,16 +80,39 @@ with st.chat_message("user"):
 api_messages = [{"role": "system", "content": system_prompt}]
 api_messages.extend(st.session_state.messages)
 
+def token_stream():
+    """Yield each text token as the model produces it."""
+    stream = client.chat.completions.create(
+        model=model,
+        messages=api_messages,
+        stream=True,
+    )
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        token = chunk.choices[0].delta.content
+        if token:
+            yield token
+
+
 with st.chat_message("assistant"):
     try:
+        # Spinner lives here. The block ends as soon as the first token arrives.
         with st.spinner("Thinking..."):
-            completion = client.chat.completions.create(
-                model=model,
-                messages=api_messages,
-            )
-        reply = completion.choices[0].message.content or "(empty reply)"
+            tokens = token_stream()
+            first_token = next(tokens, "")
+
+        if first_token:
+            def reply_tokens():
+                yield first_token
+                yield from tokens
+
+            reply = st.write_stream(reply_tokens()) or "(empty reply)"
+        else:
+            reply = "(empty reply)"
+            st.markdown(reply)
     except Exception as error:
         reply = f"Request failed: {error}"
-    st.markdown(reply)
+        st.markdown(reply)
 
 st.session_state.messages.append({"role": "assistant", "content": reply})
