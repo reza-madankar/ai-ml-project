@@ -2,3 +2,6 @@ openai
 requests
 pandas
 pydantic
+streamlit
+fastapi
+uvicorn
