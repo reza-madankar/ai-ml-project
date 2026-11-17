@@ -1,5 +1,6 @@
 """Run: uv run streamlit run retrieval_dashboard.py"""
 
+from contextlib import nullcontext
 from datetime import datetime, timezone
 import json
 import time
@@ -10,6 +11,7 @@ from retrieval import CORPUS, ROOT, build_index, search
 from vector_retrieval import MODEL, build_vector_index, prepare_store, vector_search
 from hybrid_retrieval import TUNING_REPORT, hybrid_search, load_tuned_alpha
 from rag import LLM_MODEL, assemble_context, citation_status, generate_answer, make_payload
+from ir_rag_comparison import answer_from_context
 
 
 st.set_page_config(page_title="BioASQ RAG Lab", page_icon="🔎", layout="wide")
@@ -24,7 +26,7 @@ def load_index(size, overlap_words, source_mtime, source_size, index_version=2):
 
 with st.sidebar:
     st.header("Retrieval settings")
-    method = st.selectbox("Retrieval method", ["FAISS + OpenRouter", "BM25", "Hybrid"], index=2)
+    method = st.selectbox("Retrieval method", ["NumPy + Gemini", "BM25", "Hybrid"], index=2)
     chunk_size = st.slider("Chunk size (words)", 50, 500, 500, step=25)
     overlap = st.slider("Overlap (words)", 0, chunk_size - 1, min(75, chunk_size - 1))
     top_k = st.slider("Number of results", 1, 20, 5)
@@ -49,7 +51,8 @@ with st.sidebar:
                 st.caption("Metrics describe the saved tuned weight. Manual overrides do not change these results.")
     if method != "BM25":
         st.caption(f"Embedding model: {MODEL}")
-        st.caption("Chunks and queries are embedded through OpenRouter; FAISS is stored locally.")
+        st.caption("Vector search covers up to the first 5,000 chunks; BM25 searches the full corpus. Hybrid combines both scopes.")
+        st.caption("The first 5,000 corpus chunks and search queries are embedded through Google AI Studio; vectors are stored locally in NumPy.")
         build_clicked = st.button("Build / resume vector index")
     else:
         build_clicked = False
@@ -63,6 +66,7 @@ with st.sidebar:
     st.caption("The query, selected context, and displayed prompt are sent to OpenRouter for generation.")
     if st.button("Clear last run"):
         st.session_state.pop("rag_run", None)
+        st.session_state.pop("comparison_run", None)
         st.rerun()
 
 settings = {"method": method, "chunk_size": chunk_size, "overlap": overlap,
@@ -80,11 +84,81 @@ if build_clicked:
     finally:
         progress.empty()
 
+st.subheader("Compare IR and RAG using BM25")
+st.markdown("**Information retrieval (IR)** ranks and returns matching passages. **RAG** takes those same passages, adds them to a prompt, and asks a language model to answer with citations.")
+st.caption("One local BM25 search supplies both sides. Only RAG sends the question and selected excerpts to Google AI Studio. The biomedical corpus is research material, not medical advice.")
+comparison_mode = st.radio("Choose a system", ["Compare IR and RAG", "IR only", "RAG only"], horizontal=True)
+with st.form("comparison_query"):
+    comparison_query = st.text_input("Question for IR and RAG", placeholder="Which genes are associated with Hirschsprung disease?")
+    compare_clicked = st.form_submit_button("Run selected system", type="primary")
+
+if compare_clicked:
+    st.session_state.pop("comparison_run", None)
+    if not comparison_query.strip():
+        st.warning("Enter a question to compare the two systems.")
+    elif not CORPUS.exists():
+        st.error("The BioASQ passage file is missing.")
+    else:
+        try:
+            with st.spinner("Searching the corpus with BM25…"):
+                stat = CORPUS.stat()
+                index = load_index(chunk_size, overlap, stat.st_mtime_ns, stat.st_size)
+                results = search(index, comparison_query, top_k)
+                context = assemble_context(results, context_budget)
+            comparison = {"query": comparison_query, "results": results, "context": context, "mode": comparison_mode}
+            st.session_state["comparison_run"] = comparison
+            if context["sources"] and comparison_mode != "IR only":
+                try:
+                    with st.spinner("Generating an answer from the same BM25 passages…"):
+                        comparison["answer"] = answer_from_context(comparison_query, context)
+                except RuntimeError as error:
+                    comparison["error"] = str(error)
+        except (RuntimeError, ValueError, OSError) as error:
+            st.error(str(error))
+
+comparison = st.session_state.get("comparison_run")
+if comparison:
+    st.markdown("**Executed question:** " + comparison["query"])
+    if comparison_mode != comparison["mode"]:
+        st.info("The result below uses the previous selection. Run the selected system to update it.")
+    mode = comparison["mode"]
+    ir_col, rag_col = st.columns(2) if mode == "Compare IR and RAG" else (nullcontext(), nullcontext())
+    if mode != "RAG only":
+      with ir_col:
+        st.markdown("### IR · Ranked passages")
+        st.caption("BM25 returns source text ranked by keyword relevance; it does not compose an answer.")
+        if not comparison["results"]:
+            st.info("No matching passages were found.")
+        for rank, result in enumerate(comparison["results"], 1):
+            with st.expander(f"{rank}. Passage {result['passage_id']} · BM25 {result['score']:.4g}", expanded=rank == 1):
+                st.write(result["text"])
+    if mode != "IR only":
+      with rag_col:
+        st.markdown("### RAG · Generated answer")
+        st.caption("Gemini answers from the BM25 excerpts within the context budget and cites their labels.")
+        if not comparison["context"]["sources"]:
+            st.info("No source context was found, so no answer was generated.")
+        elif comparison.get("error"):
+            st.error(comparison["error"])
+        elif comparison.get("answer"):
+            st.markdown(comparison["answer"])
+            citations = citation_status(comparison["answer"], comparison["context"]["sources"])
+            if citations["unknown"]:
+                st.warning("Unknown citation labels: " + ", ".join(citations["unknown"]))
+            if not citations["has_citations"]:
+                st.warning("The answer did not cite its sources.")
+            with st.expander("Excerpts sent to Gemini and citation key"):
+                for source in comparison["context"]["sources"]:
+                    st.markdown(f"**[{source['label']}]** Passage {source['passage_id']} · Chunk {source['chunk_number'] + 1}" + (" · truncated" if source['truncated'] else ""))
+                    st.write(source["excerpt"])
+            st.caption("Citation labels identify supplied excerpts; they do not verify that claims are supported.")
+st.divider()
+
 st.subheader("The RAG pipeline")
 st.caption("These stages map directly to your Advanced-RAG diagram.")
 for column, number, title, detail in zip(st.columns(6), range(1, 7),
         ["Indexing", "Query", "Retrieve", "Augment", "Prompt", "LLM → Response"],
-        ["Documents → chunks → vectors → store", "Question → query vector", "Rank relevant source chunks",
+        ["Documents → chunks → index", "Question → query vector", "Rank relevant source chunks",
          "Assemble the retrieved context", "Question + context + instructions", "GPT-4o mini + source citations"]):
     with column:
         with st.container(border=True):
@@ -102,12 +176,12 @@ st.subheader("01 · Indexing — Documents → Chunks → Embedding model → Ve
 metrics = st.columns(4)
 metrics[0].metric("Original passages", "40,221" if CORPUS.exists() else "Missing dataset")
 metrics[1].metric("Chunk size / overlap", f"{chunk_size} / {overlap} words")
-metrics[2].metric("FAISS indexed chunks", f"{vector_metadata['chunks']:,}" if vector_metadata else "Not built")
+metrics[2].metric("NumPy indexed chunks", f"{vector_metadata['chunks']:,}" if vector_metadata else "Not built")
 metrics[3].metric("Vector dimensions", vector_metadata["dimensions"] if vector_metadata else "—")
 st.caption("Corpus: BioASQ passages. Blank / literal 'nan' passages are excluded. Question-answer labels are reserved for evaluation.")
 with st.expander("Inspect corpus and index details"):
     st.write(f"**Embedding model:** {MODEL}")
-    st.write("**Stores:** local FAISS for cosine search and SQLite FTS5 for BM25.")
+    st.write("**Stores:** local NumPy cosine search and SQLite FTS5 for BM25.")
     st.write("**Chunks:** overlapping windows of whitespace-separated words; the final chunk can be shorter.")
     if vector_metadata:
         st.json(vector_metadata, expanded=False)
@@ -186,7 +260,7 @@ for rank, result in enumerate(run["retrieved_chunks"], 1):
         title, score = st.columns([4, 1])
         title.markdown(f"**{rank}. Passage {result['passage_id']} · Chunk {result['chunk_number'] + 1}**")
         score.caption(f"Score: {result['score']:.6g}")
-        score_name = {"Hybrid": "Weighted RRF", "BM25": "BM25", "FAISS + OpenRouter": "Cosine similarity"}[run["settings"]["method"]]
+        score_name = {"Hybrid": "Weighted RRF", "BM25": "BM25", "NumPy + Gemini": "Cosine similarity"}[run["settings"]["method"]]
         included = f"Included as [{source['label']}]" if source else "Excluded by context budget"
         st.caption(f"{score_name} · {len(result['text'].split())} words · {included}" + (" · excerpt truncated" if source and source["truncated"] else ""))
         if run["settings"]["method"] == "Hybrid":

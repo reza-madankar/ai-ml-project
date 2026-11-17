@@ -1,4 +1,4 @@
-provider: "gemini"   # "openrouter" or "gemini"
+provider: "gemini"
 
 providers:
   openrouter:

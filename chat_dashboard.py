@@ -17,6 +17,7 @@ How a chat app works
 """
 
 import os
+from pathlib import Path
 
 import streamlit as st
 import yaml
@@ -24,17 +25,17 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 
-def load_client(config_path="config.yaml"):
-    """Read config.yaml and build the same OpenAI client as currencyAI.py."""
-    load_dotenv()
+def load_client(config_path=Path(__file__).resolve().parent / "config.yaml"):
+    """Build a Google AI Studio client using the project configuration and .env."""
+    load_dotenv(Path(__file__).resolve().parent / ".env")
     with open(config_path, "r", encoding="utf-8") as file:
         config = yaml.safe_load(file)
 
-    provider = config["providers"][config["provider"]]
-    client = OpenAI(
-        base_url=provider["base_url"],
-        api_key=os.getenv(provider["api_key_env"]),
-    )
+    provider = config["providers"]["gemini"]
+    key = os.getenv("GOOGLE_API_KEY", "").strip()
+    if not key:
+        raise ValueError("Set GOOGLE_API_KEY in the project .env file or your environment, then reload the app.")
+    client = OpenAI(base_url="https://generativelanguage.googleapis.com/v1beta/openai/", api_key=key)
     return client, provider["model"]
 
 
@@ -42,7 +43,11 @@ st.set_page_config(page_title="Chat Bot", page_icon="💬")
 st.title("Chat Bot")
 st.caption("Type a message. The model sees the whole conversation, not only the last line.")
 
-client, model = load_client()
+try:
+    client, model = load_client()
+except (ValueError, OSError, KeyError, yaml.YAMLError) as error:
+    st.error(f"Chat setup failed: {error}")
+    st.stop()
 
 # First visit: start with an empty conversation.
 # Later visits in the same browser tab reuse this list.
@@ -112,7 +117,8 @@ with st.chat_message("assistant"):
             reply = "(empty reply)"
             st.markdown(reply)
     except Exception as error:
-        reply = f"Request failed: {error}"
-        st.markdown(reply)
+        st.error(f"Request failed: {error}")
+        st.session_state.messages.pop()
+        st.stop()
 
 st.session_state.messages.append({"role": "assistant", "content": reply})

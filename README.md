@@ -1,6 +1,19 @@
 # ai-ml-project
 AI Learning
 
+## Chat dashboard
+
+Run `uv run streamlit run chat_dashboard.py` from the project directory.
+The chat uses Google AI Studio; put `GOOGLE_API_KEY=your_key` in the project's
+`.env` file (or export it in your shell). Choose the chat model under
+`providers.gemini.model` in `config.yaml`. If the key is missing, the app
+shows setup instructions. Streamlit uses polling for file changes to avoid
+exhausting Linux inotify instances; automatic reload remains available.
+
+## Compare IR and RAG
+
+In `uv run streamlit run retrieval_dashboard.py`, choose **IR only**, **RAG only**, or **Compare IR and RAG**, then enter a question. One local BM25 search returns ranked passages for the IR side; the RAG side sends excerpts from those same results to Gemini via Google AI Studio to produce an answer with source labels. The sidebar controls chunk size, overlap, number of results, and the context budget. Set `GOOGLE_API_KEY` in `.env` for generation. BM25 retrieval itself requires no API key. The comparison is separate from the detailed pipeline below it.
+
 ## Complete RAG dashboard
 
 Run `uv run streamlit run retrieval_dashboard.py` and open http://localhost:8501.
@@ -8,12 +21,12 @@ The dashboard now implements the full pipeline using **GPT-4o mini**
 (`openai/gpt-4o-mini`) through the existing OpenRouter connection. The model's
 [official documentation](https://developers.openai.com/api/docs/models/gpt-4o-mini)
 describes GPT-4o mini; this project uses OpenRouter's Chat Completions endpoint.
-The local `.env` variable `OPENAI_ROUTER_KEY` is used for embedding and generation.
+The detailed pipeline uses `OPENAI_ROUTER_KEY` for generation and Google AI Studio keys for embeddings.
 
 The numbered stages correspond to the supplied Advanced-RAG diagram, included
 under **Your architecture diagram and stage mapping**:
 
-1. **Indexing:** corpus, chunk settings, embedding model, FAISS vector count and dimensions.
+1. **Indexing:** corpus, chunk settings, embedding model, NumPy vector count and dimensions.
 2. **Query:** the entered question and selected retrieval strategy; query rewriting is not performed.
 3. **Retrieve:** ranked source chunks, scores, hybrid branch ranks, and which excerpts enter the prompt.
 4. **Augment:** exact assembled context with source labels and a configurable body-word budget.
@@ -21,8 +34,7 @@ under **Your architecture diagram and stage mapping**:
 6. **Generate:** GPT-4o mini's answer, source reference key, finish reason, latency and token usage.
 
 **Run full RAG** retrieves and generates in one step. **Retrieve only** allows
-inspection before pressing **Generate answer**. Hybrid is the default and uses
-the saved 75% BM25 / 25% embedding weight for the current 500/75-word settings.
+inspection before pressing **Generate answer**. Hybrid defaults to an untuned 50% BM25 / 50% embedding weight for the new Gemini index; the previous model’s tuning does not apply.
 All three retrieval methods remain available.
 
 Context is assembled in retrieval order. Repeated identical source chunks are
@@ -49,45 +61,29 @@ uv sync
 uv run streamlit run retrieval_dashboard.py
 ```
 
-The default retrieval method embeds chunks and queries using
-`perplexity/pplx-embed-v1-0.6b` through OpenRouter and searches a local FAISS
-index with cosine similarity. Set `OPENAI_ROUTER_KEY` in `.env` (ignored by Git).
-Chunk size is 500 words with 75 words of overlap. Blank and literal `nan`
-passages are excluded from both indexes. Corpus chunks and search queries
-are sent to OpenRouter. Generation uses the selected context as described above.
+The vector retrieval method embeds up to the first **5,000 chunks** using
+`gemini-embedding-2` through Google AI Studio and searches a local NumPy
+cosine-similarity store. BM25 searches the full corpus; hybrid combines BM25
+results from the full corpus with vector results from this limited subset.
+The subset follows corpus order, so vector and hybrid results do not cover the
+whole dataset equally. Chunk size is 500 words with 75 words of overlap.
 
-Build once using **Build / resume vector index** in the sidebar, or:
+Set `GEMINI_KEYS` in `.env` to a comma-separated list of Google AI Studio API
+keys, or set `GOOGLE_API_KEY` for a single key. Keys are rotated across requests;
+Google rate limits apply per project, so keys from the same project share quota.
+The indexer paces requests and saves each completed batch for resumption. Usage
+may incur charges and consume quota on the projects behind the keys.
 
-```bash
-uv run python vector_retrieval.py
-```
-
-Completed embedding batches are cached under `.cache/retrieval/` and reused
-after interruption or rate limiting. Keep the same batch size when resuming.
-Model, corpus, and chunk settings determine which store is used. To run a small
-live test without building the entire corpus:
+Build using **Build / resume vector index** in the sidebar, or run:
 
 ```bash
-uv run python vector_retrieval.py --limit 32 --query "Hirschsprung disease genes"
+uv run python vector_retrieval.py --limit 5000
 ```
 
-The limited test uses its own store; the dashboard searches the full corpus.
-Select **BM25** in the sidebar to use the existing local keyword retrieval.
-
-To search the full vector store from Python after building it:
-
-```python
-from vector_retrieval import build_vector_index, vector_search
-
-store = build_vector_index()  # Reuses the completed store.
-results = vector_search(store, "Hirschsprung disease genes", top_k=5)
-```
-
-Enter an English biomedical query to get ranked chunks from the downloaded
-BioASQ corpus. Adjust the number of results, chunk size (default 500 words),
-and overlap (default 75 words) in the sidebar. Each result shows its source
-passage ID, chunk number, text, and cosine similarity or BM25 score.
-Results can be downloaded as JSON.
+If interrupted or rate-limited, run the same command again to reuse completed
+batches. Keep the same batch size. A small smoke test can use `--limit 32`;
+it creates a separate store. The dashboard uses the 5,000-chunk store.
+Query text and corpus chunks are sent to Google AI Studio for embedding.
 
 In BM25 mode, the first search splits passages and builds a SQLite FTS5 index in
 `.cache/retrieval/`. Later searches reuse it. A different corpus or chunking
@@ -118,7 +114,9 @@ To tune alpha against the downloaded BioASQ relevance labels:
 uv run python tune_hybrid.py
 ```
 
-This uses all 4,719 labeled questions, splitting by normalized question text
+The existing saved report was computed with the previous full-corpus OpenRouter/FAISS index and does not describe the new limited Gemini/NumPy store. Retuning sends all 4,719 questions to Google for embedding and uses additional quota.
+
+The tuning script uses all 4,719 labeled questions, splitting by normalized question text
 into development (80%) and held-out evaluation (20%), with seed 42. Duplicate
 question text stays in the same split. The dataset's original `test` split is
 being repurposed for this local experiment; this is not an untouched official

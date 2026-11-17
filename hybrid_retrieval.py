@@ -43,8 +43,8 @@ def load_tuned_alpha(store, report=TUNING_REPORT):
         return None
     result = json.loads(path.read_text())
     settings = json.loads((Path(store) / "ready.json").read_text())
-    for name in ["model", "sha256", "chunk_size", "overlap"]:
-        if result["settings"][name] != settings[name]:
+    for name in ["model", "sha256", "chunk_size", "overlap", "limit"]:
+        if result["settings"].get(name) != settings.get(name):
             return None
     if (result["settings"].get("bm25_version") != 2
             or result["settings"].get("candidate_k") != CANDIDATE_K
@@ -60,8 +60,8 @@ def hybrid_search(bm25_index, store, query, alpha, top_k=5, candidate_k=CANDIDAT
     vector_settings = json.loads((Path(store) / "ready.json").read_text())
     if any(bm25_settings[name] != vector_settings[name]
            for name in ["sha256", "chunk_size", "overlap"]):
-        raise ValueError("BM25 and FAISS must use the same corpus and chunk settings")
-    if bm25_settings["version"] != 2 or vector_settings["limit"] is not None:
-        raise ValueError("Hybrid search requires the full, cleaned corpus in both indexes")
+        raise ValueError("BM25 and the vector store must use the same corpus and chunk settings")
+    if bm25_settings["version"] != 2:
+        raise ValueError("Hybrid search requires the cleaned BM25 corpus")
     return fuse_rankings(search(bm25_index, query, candidate_k),
                          vector_search(store, query, candidate_k), alpha, top_k)

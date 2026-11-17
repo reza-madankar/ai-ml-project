@@ -9,7 +9,6 @@ import math
 from pathlib import Path
 import random
 
-import faiss
 import numpy as np
 import pyarrow.parquet as pq
 
@@ -50,7 +49,6 @@ def select_alpha(scores):
 
 
 def main():
-    faiss.omp_set_num_threads(4)
     store = build_vector_index()
     metadata = json.loads((store / "ready.json").read_text())
     chunks = json.loads((store / "chunks.json").read_text())
@@ -61,7 +59,7 @@ def main():
     if any(not label for label in labels):
         raise ValueError("Empty relevance labels require an explicit evaluation policy")
     splits = split_questions(rows)
-    settings = {name: metadata[name] for name in ["model", "sha256", "chunk_size", "overlap"]}
+    settings = {name: metadata[name] for name in ["model", "sha256", "chunk_size", "overlap", "limit"]}
     settings.update(bm25_version=2, candidate_k=CANDIDATE_K, rrf_k=RRF_K,
                     questions_sha256=hashlib.sha256(QUESTIONS.read_bytes()).hexdigest())
     cache_key = hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()[:20]
@@ -94,11 +92,14 @@ def main():
         candidates = json.loads(candidates_path.read_text())
     else:
         vectors = np.concatenate(all_vectors)
-        index = faiss.read_index(str(store / "index.faiss"))
-        if vectors.shape != (len(rows), index.d):
+        corpus_vectors = np.load(store / "vectors.npy", mmap_mode="r", allow_pickle=False)
+        if vectors.shape != (len(rows), corpus_vectors.shape[1]):
             raise ValueError("Query embedding shape does not match corpus index")
-        print("Searching FAISS for all queries…", flush=True)
-        _, positions = index.search(vectors, CANDIDATE_K)
+        print("Searching NumPy vectors for all queries…", flush=True)
+        positions = []
+        for start in range(0, len(vectors), 64):
+            scores = vectors[start:start + 64] @ corpus_vectors.T
+            positions.extend(np.argsort(-scores, axis=1, kind="stable")[:, :CANDIDATE_K])
 
         def rank_query(number):
             bm25 = search(bm25_index, rows[number]["question"], CANDIDATE_K)
