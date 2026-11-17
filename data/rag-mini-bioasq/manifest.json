@@ -1,0 +1,17 @@
+{
+  "dataset": "rag-datasets/rag-mini-bioasq",
+  "source": "https://huggingface.co/datasets/rag-datasets/rag-mini-bioasq",
+  "revision": "224a87f64a5c3a720b5bc627cf760f543b2f1e79",
+  "files": [
+    {
+      "path": "data/passages.parquet/part.0.parquet",
+      "bytes": 24470604,
+      "sha256": "93afd23506e6ab65451a43a411fd6481b6378a00fef7983b44cc8c3ddbb37c84"
+    },
+    {
+      "path": "data/test.parquet/part.0.parquet",
+      "bytes": 1290026,
+      "sha256": "12679e03615d16b423b5554f8b2a6eb334f4cad89e62d202da5cc43cb9aeafb0"
+    }
+  ]
+}

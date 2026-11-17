@@ -1,6 +1,8 @@
 openai
 requests
 pandas
+pyarrow>=19
+faiss-cpu>=1.10
 pydantic
 streamlit
 fastapi
